@@ -108,7 +108,7 @@ function setupMqttClient() {
 		const code = parseInt(parts[5]);	// 알람 코드 (0~7)
 
 		// 5. 시각 생성 및 변환 (KST)
-		const real_timestamp_string = `${date_part} ${time_part}`;
+		const real_timestamp_string = `${date_part}T${time_part}+09:00`;
 		const real_timestamp = new Date(real_timestamp_string);
 		
 		try {
