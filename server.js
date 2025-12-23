@@ -58,8 +58,8 @@ const AlarmSchema = new mongoose.Schema({
 	mac_address: { type: String, required: true, index: true },
 	ip_address: { type: String, required: true, index: true },
 		
-	// 알람 데이터 필드 (문자열)
-	status: { type: String, required: true },
+	// 알람 데이터 필드
+	status: { type: Number, required: true },
 		
 	active: { type: Boolean, required: true, index: true }, // 현재 활성 상태 (미해제: true)
 });
@@ -121,12 +121,9 @@ function setupMqttClient() {
 				// 5. 시각 생성 및 변환 (KST)
 				const real_timestamp_string = `${date_part} ${time_part}`;
         const real_timestamp = new Date(real_timestamp_string);
-
-				// 6. 알람 상태 문자열 변환
-				const alarm_status_string = ALARM_CODE_MAP[code] || `알 수 없는 코드 (${code})`;
 				
 				try {
-						console.log(`[MQTT] Received: MAC=${mac_address}, Flag=${flag}, Code=${code} (${alarm_status_string})`);
+						console.log(`[MQTT] Received: MAC=${mac_address}, Flag=${flag}, Code=${code}`);
 
 						if (flag === 0) {
 								// 7-1. Flag=0: 알람 해제 요청 -> 기존 활성 로그 해제
@@ -144,7 +141,7 @@ function setupMqttClient() {
 										mac_address: mac_address,
 										ip_address: ip_address,
 										
-										status: alarm_status_string, 
+										status: code, 
 										
 										active: false, // 해제 이벤트
 								});
@@ -162,7 +159,7 @@ function setupMqttClient() {
 										mac_address: mac_address,
 										ip_address: ip_address,
 										
-										status: alarm_status_string,
+										status: code,
 										
 										active: true, // 알람 발생 시 active: true
 								});
