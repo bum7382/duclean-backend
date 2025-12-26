@@ -249,6 +249,24 @@ app.get('/api/logs/filter', async (req, res) => {
 	}
 });
 
+// 맥 주소로 등록된 시리얼 번호 값 받아오기
+app.get('/api/serial/:mac', async (req, res) => {
+    const { mac } = req.params;
+
+    try {
+        // Device 컬렉션에서 해당 MAC 주소 찾기
+        const device = await Device.findOne({ mac_address: mac });
+
+        if (device) {
+            res.json({ success: true, serial: device.serial });
+        } else {
+            res.json({ success: false, message: "등록된 시리얼 번호가 없습니다." });
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 // 4.1 [POST] /api/serial: 시리얼 넘버와 MAC 주소 매칭
 app.post('/api/serial', async (req, res) => {
     const { mac, serial } = req.body;
