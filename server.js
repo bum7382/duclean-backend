@@ -46,14 +46,20 @@ const AlarmSchema = new mongoose.Schema({
 	stop_timestamp: { type: Date },
 	mac_address: { type: String, required: true, index: true },
 	ip_address: { type: String, required: true, index: true },
-		
 	// 알람 데이터 필드
 	status: { type: Number, required: true },
-		
 	active: { type: Boolean, required: true, index: true }, // 현재 활성 상태 (미해제: true)
+	serial: { type: String, required: false }
 });
 
 const AlarmLog = mongoose.model('AlarmLog', AlarmSchema, 'alarm');
+
+// 디바이스 매핑 스키마
+const DeviceSchema = new mongoose.Schema({
+    mac_address: { type: String, required: true, unique: true },
+    serial: { type: String, required: true }
+});
+const Device = mongoose.model('Device', DeviceSchema);
 
 
 // 3. MQTT 클라이언트 설정 및 구독
@@ -112,6 +118,9 @@ function setupMqttClient() {
 		const real_timestamp = new Date(real_timestamp_string);
 		
 		try {
+			// DB에서 해당 MAC 주소에 매핑된 시리얼 넘버가 있는지 확인
+			const deviceMatch = await Device.findOne({ mac_address: mac_address });
+			const currentSerial = deviceMatch ? deviceMatch.serial : null;
 			console.log(`[MQTT] Received: MAC=${mac_address}, Flag=${flag}, Code=${code}`);
 
 			if (flag === 0) {
@@ -131,11 +140,12 @@ function setupMqttClient() {
 
 				const newClearLog = new AlarmLog({
 					timestamp: real_timestamp, 
-					stop_timestamp: real_timestamp, // [추가] 해제 시각 기록
+					stop_timestamp: real_timestamp,
 					mac_address: mac_address,
 					ip_address: ip_address,
 					status: code, 
 					active: false,
+					serial: currentSerial,
 				});
 				await newClearLog.save();
 				console.log('💾 New Alarm Clear log saved to MongoDB (Active: false).');
@@ -150,10 +160,9 @@ function setupMqttClient() {
 							timestamp: real_timestamp, 
 							mac_address: mac_address,
 							ip_address: ip_address,
-							
 							status: code,
-							
 							active: true, // 알람 발생 시 active: true
+							serial: currentSerial
 					});
 					await newLog.save();
 					console.log('💾 New Alarm log saved to MongoDB (Active: true).');
@@ -185,7 +194,7 @@ app.get('/api/logs', async (req, res) => {
 	try {
 		const logs = await AlarmLog.find()
 			.sort({ timestamp: -1 })
-			.select('mac_address ip_address timestamp status active -_id'); // 5가지 필드 조회
+			.select('mac_address ip_address timestamp status active serial -_id'); // 5가지 필드 조회
 
 		res.json({
 			data: logs
@@ -227,7 +236,7 @@ app.get('/api/logs/filter', async (req, res) => {
 
 		const logs = await AlarmLog.find(query)
 			.sort({ timestamp: -1 })
-			.select('mac_address ip_address timestamp stop_timestamp status active -_id');
+			.select('mac_address ip_address timestamp stop_timestamp status active serial -_id');
 		
 		res.json({
 			data: logs
@@ -239,6 +248,41 @@ app.get('/api/logs/filter', async (req, res) => {
 		res.status(500).json({ success: false, message: error.message });
 	}
 });
+
+// 4.1 [POST] /api/serial: 시리얼 넘버와 MAC 주소 매칭
+app.post('/api/serial', async (req, res) => {
+    const { mac, serial } = req.body;
+
+    if (!mac || !serial) {
+      return res.status(400).json({ success: false, message: "MAC과 Serial이 필요합니다." });
+    }
+
+    try {
+			// 1. Device 컬렉션에 매핑 정보 저장 (이미 있으면 업데이트)
+			await Device.findOneAndUpdate(
+				{ mac_address: mac },
+				{ serial: serial },
+				{ upsert: true, new: true }
+			);
+
+			// 2. 기존 AlarmLog 중 해당 MAC을 가진 모든 로그의 시리얼 넘버 업데이트
+			const result = await AlarmLog.updateMany(
+				{ mac_address: mac },
+				{ $set: { serial: serial } }
+			);
+
+			console.log(`✅ Serial Matched: MAC(${mac}) -> Serial(${serial})`);
+			res.json({ 
+					success: true, 
+					message: "매칭 성공 및 기존 로그 업데이트 완료",
+					updatedLogs: result.modifiedCount 
+			});
+    } catch (error) {
+        console.error('매칭 에러:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 
 
 // 5. 서버 실행
