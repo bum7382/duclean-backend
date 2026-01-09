@@ -76,18 +76,11 @@ async function handleAlarmClear({ mac, ip, stopTime }) {
 
 function setupMqttClient() {
 	// 3.1. 브로커 정보 설정
-	const BROKER_URL = 'mqtt://3.77.240.111:1883'; 
+	const BROKER_URL = 'mqtt://broker.emqx.io:1883'; 
 	const TOPIC = 'alarm';
 
-	const options = {
-    keepalive: 60,
-    reconnectPeriod: 1000, // 연결 끊겼을 때 1초마다 재시도
-    connectTimeout: 30 * 1000, // 타임아웃을 30초로 연장
-    clean: true
-  };
-
-
-	const client = mqtt.connect(BROKER_URL, options);
+	const client = mqtt.connect(BROKER_URL);
+	
 
 	client.on('connect', () => {
 		console.log(`✅ MQTT Connected to ${BROKER_URL}`);
