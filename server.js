@@ -76,7 +76,7 @@ async function handleAlarmClear({ mac, ip, stopTime }) {
 
 function setupMqttClient() {
 	// 3.1. 브로커 정보 설정
-	const BROKER_URL = 'mqtt://3.120.241.59:1883'; 
+	const BROKER_URL = 'mqtt://broker.hivemq.com:1883'; 
 	const TOPIC = 'alarm';
 
 	const client = mqtt.connect(BROKER_URL);
