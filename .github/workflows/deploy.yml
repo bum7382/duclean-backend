@@ -20,6 +20,7 @@ jobs:
           username: ${{ secrets.GCP_USERNAME }}
           key: ${{ secrets.GCP_SSH_KEY }}
           port: 22
+          debug: true
           script: |
             cd /home/${{ secrets.GCP_USERNAME }}/your-project-path
             git pull origin main
