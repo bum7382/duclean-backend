@@ -22,7 +22,7 @@ jobs:
           port: 22
           debug: true
           script: |
-            cd /home/${{ secrets.GCP_USERNAME }}/your-project-path
+            cd /home/${{ secrets.GCP_USERNAME }}/duclean-backend
             git pull origin main
             npm install
             pm2 restart all
