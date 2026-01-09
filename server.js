@@ -75,37 +75,31 @@ async function handleAlarmClear({ mac, ip, stopTime }) {
 }
 
 function setupMqttClient() {
-	const BROKER_URL = 'ws://broker.hivemq.com:8000/mqtt'; 
-  const TOPIC = 'alarm';
+	// 3.1. 브로커 정보 설정
+	const BROKER_URL = 'mqtt://3.77.240.111:1883'; 
+	const TOPIC = 'alarm';
 
-  const options = {
-    clientId: `client_${Math.random().toString(16).slice(2, 10)}`, // 랜덤 ID
-    protocolVersion: 4, // MQTT v3.1.1 강제 지정
-    clean: true,
-    connectTimeout: 10000,
+	const options = {
+    keepalive: 60,
+    reconnectPeriod: 1000, // 연결 끊겼을 때 1초마다 재시도
+    connectTimeout: 30 * 1000, // 타임아웃을 30초로 연장
+    clean: true
   };
 
-  console.log(`📡 Attempting WebSocket connection with ID: ${options.clientId}`);
-  const client = mqtt.connect(BROKER_URL, options);
 
-  client.on('connect', () => {
-    console.log(`✅ MQTT Connected to ${BROKER_URL}`);
-    
-    client.subscribe(TOPIC, { qos: 0 }, (err) => {
-      if (!err) {
-        console.log(`📡 Subscribed to topic: ${TOPIC}`);
-      }
-    });
-  });
+	const client = mqtt.connect(BROKER_URL, options);
 
-  // 에러 발생 시 상세 정보 출력
-  client.on('error', (err) => {
-    console.error('❌ MQTT Error Detail:', err.message);
-  });
-
-  client.on('offline', () => {
-    console.warn('⚠️ MQTT Client Offline - checking network...');
-  });
+	client.on('connect', () => {
+		console.log(`✅ MQTT Connected to ${BROKER_URL}`);
+		
+		client.subscribe(TOPIC, { qos: 0 }, (err) => {
+			if (!err) {
+					console.log(`📡 Subscribed to topic: ${TOPIC}`);
+			} else {
+					console.error('❌ MQTT Subscription Error:', err);
+			}
+		});
+	});
 
 		// 3.4. 메시지 수신 이벤트 처리 
 	client.on('message', async (topic, message) => {
