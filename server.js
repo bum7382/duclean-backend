@@ -50,9 +50,11 @@ const AlarmSchema = new mongoose.Schema({
 	status: { type: Number, required: true },
 	active: { type: Boolean, required: true, index: true }, // 현재 활성 상태 (미해제: true)
 	serial: { type: String, required: false }
+},{ 
+  collection: 'alarm' // <-- 여기에 컬렉션 이름을 명시적으로 고정하세요.
 });
 
-const AlarmLog = mongoose.model('AlarmLog', AlarmSchema, 'alarm');
+const AlarmLog = mongoose.model('AlarmLog', AlarmSchema);
 
 // 디바이스 매핑 스키마
 const DeviceSchema = new mongoose.Schema({
@@ -97,6 +99,10 @@ function setupMqttClient() {
 		// 3.4. 메시지 수신 이벤트 처리 
 	client.on('message', async (topic, message) => {
 		const payload = message.toString().trim(); 
+
+		const rawPayload = message.toString();
+		console.log(`[MQTT 수신] 토픽: ${topic}`);
+		console.log(`[MQTT 수신] 내용: ${rawPayload}`);
 		
 		// 2. 공백 기준으로 문자열을 분리 [0:날짜, 1:시간, 2:MAC, 3:IP, 4:Flag, 5:Code, 6:Count]
 		const parts = payload.split(' '); 
