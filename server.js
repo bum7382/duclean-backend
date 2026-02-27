@@ -51,7 +51,7 @@ const AlarmSchema = new mongoose.Schema({
 	active: { type: Boolean, required: true, index: true }, // 현재 활성 상태 (미해제: true)
 	serial: { type: String, required: false }
 },{ 
-  collection: 'alarm' // <-- 여기에 컬렉션 이름을 명시적으로 고정하세요.
+  collection: 'alarm'
 });
 
 const AlarmLog = mongoose.model('AlarmLog', AlarmSchema);
@@ -87,7 +87,7 @@ function setupMqttClient() {
 	client.on('connect', () => {
 		console.log(`✅ MQTT Connected to ${BROKER_URL}`);
 		
-		client.subscribe(TOPIC, { qos: 0 }, (err) => {
+		client.subscribe(TOPIC, { qos: 2 }, (err) => {
 			if (!err) {
 					console.log(`📡 Subscribed to topic: ${TOPIC}`);
 			} else {
