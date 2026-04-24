@@ -61,7 +61,7 @@ const DeviceSchema = new mongoose.Schema({
     mac_address: { type: String, required: true, unique: true },
     serial: { type: String, required: true }
 });
-const Device = mongoose.model('Device', DeviceSchema);
+const Device = mongoose.model('Device', DeviceSchema, 'devices');
 
 
 // 3. MQTT 클라이언트 설정 및 구독
