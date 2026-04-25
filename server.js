@@ -196,9 +196,13 @@ function setupMqttClient() {
 
 // 4. API 라우트
 
-// [GET] /api/logs: 데이터 조회 (mac, ip, serial 쿼리 파라미터로 필터링 가능, 없으면 전체 조회)
+// [GET] /api/logs: 데이터 조회 (mac, ip, serial 쿼리 파라미터로 필터링 가능, page/limit으로 페이지네이션)
 app.get('/api/logs', async (req, res) => {
 	const { mac, ip, serial } = req.query;
+	const page = Math.max(parseInt(req.query.page) || 1, 1);
+	const limit = Math.min(Math.max(parseInt(req.query.limit) || 100, 1), 500);
+	const skip = (page - 1) * limit;
+
 	const query = {};
 
 	if (mac) {
@@ -215,18 +219,45 @@ app.get('/api/logs', async (req, res) => {
 
 	try {
 		if (Object.keys(query).length > 0) {
-			console.log(`[GET /api/logs] Query: ${JSON.stringify(query)}`);
+			console.log(`[GET /api/logs] Query: ${JSON.stringify(query)}, page: ${page}, limit: ${limit}`);
 		}
 
-		const logs = await AlarmLog.find(query)
-			.sort({ timestamp: -1 })
-			.select('mac_address ip_address timestamp stop_timestamp status active serial -_id');
+		const [logs, total] = await Promise.all([
+			AlarmLog.find(query)
+				.sort({ timestamp: -1 })
+				.skip(skip)
+				.limit(limit)
+				.select('mac_address ip_address timestamp stop_timestamp status active serial -_id'),
+			AlarmLog.countDocuments(query)
+		]);
 
 		res.json({
-			data: logs
+			data: logs,
+			pagination: {
+				page,
+				limit,
+				total,
+				totalPages: Math.ceil(total / limit)
+			}
 		});
 	} catch (error) {
 		console.error('조회 에러:', error);
+		res.status(500).json({ success: false, message: error.message });
+	}
+});
+
+// [GET] /api/devices: 등록된 디바이스 전체 조회 (mac/serial 필터링은 프론트에서)
+app.get('/api/devices', async (req, res) => {
+	try {
+		const devices = await Device.find()
+			.sort({ mac_address: 1 })
+			.select('mac_address serial -_id');
+
+		res.json({
+			data: devices
+		});
+	} catch (error) {
+		console.error('디바이스 조회 에러:', error);
 		res.status(500).json({ success: false, message: error.message });
 	}
 });
