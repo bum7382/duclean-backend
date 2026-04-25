@@ -196,62 +196,37 @@ function setupMqttClient() {
 
 // 4. API 라우트
 
-// [GET] /api/logs: 전체 데이터 조회 
+// [GET] /api/logs: 데이터 조회 (mac, ip, serial 쿼리 파라미터로 필터링 가능, 없으면 전체 조회)
 app.get('/api/logs', async (req, res) => {
+	const { mac, ip, serial } = req.query;
+	const query = {};
+
+	if (mac) {
+		query.mac_address = new RegExp(mac, 'i');
+	}
+
+	if (ip) {
+		query.ip_address = ip;
+	}
+
+	if (serial) {
+		query.serial = new RegExp(serial, 'i');
+	}
+
 	try {
-		const logs = await AlarmLog.find()
+		if (Object.keys(query).length > 0) {
+			console.log(`[GET /api/logs] Query: ${JSON.stringify(query)}`);
+		}
+
+		const logs = await AlarmLog.find(query)
 			.sort({ timestamp: -1 })
-			.select('mac_address ip_address timestamp status active serial -_id'); // 5가지 필드 조회
+			.select('mac_address ip_address timestamp stop_timestamp status active serial -_id');
 
 		res.json({
 			data: logs
 		});
 	} catch (error) {
 		console.error('조회 에러:', error);
-		res.status(500).json({ success: false, message: error.message });
-	}
-});
-
-
-// [GET] /api/logs/filter: 특정 MAC 주소 및 IP 주소로 데이터 조회 
-app.get('/api/logs/filter', async (req, res) => {
-	const { mac, ip, active } = req.query; 
-	let query = {};
-
-	if (mac) {
-		query.mac_address = new RegExp(mac, 'i'); 
-	}
-	
-	if (ip) {
-		query.ip_address = ip; 
-	}
-	
-	if (active !== undefined) {
-		// 쿼리 파라미터는 문자열이므로 boolean으로 변환
-		query.active = active.toLowerCase() === 'true'; 
-	}
-
-	if (Object.keys(query).length === 0) {
-		return res.status(400).json({ 
-			success: false, 
-			message: "MAC, IP, 또는 Active 상태를 쿼리 파라미터로 제공해야 합니다." 
-		});
-	}
-
-	try {
-		console.log(`[GET FILTER] Query: ${JSON.stringify(query)}`);
-
-		const logs = await AlarmLog.find(query)
-			.sort({ timestamp: -1 })
-			.select('mac_address ip_address timestamp stop_timestamp status active serial -_id');
-		
-		res.json({
-			data: logs
-		});
-
-	} 
-	catch (error) {
-		console.error('필터 조회 에러:', error);
 		res.status(500).json({ success: false, message: error.message });
 	}
 });
