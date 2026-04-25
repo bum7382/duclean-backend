@@ -11,10 +11,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@master
+        uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.GCP_HOST }}
           username: ${{ secrets.GCP_USERNAME }}
@@ -22,7 +22,9 @@ jobs:
           port: 22
           debug: true
           script: |
+            set -e
             cd /home/${{ secrets.GCP_USERNAME }}/duclean-backend
-            git pull origin main
+            git fetch origin main
+            git reset --hard origin/main
             npm install
             pm2 restart all
