@@ -196,15 +196,49 @@ function setupMqttClient() {
 
 // 4. API 라우트
 
-// [GET] /api/logs: 전체 데이터 조회 
+// [GET] /api/logs: 데이터 조회 (mac, ip, serial 쿼리 파라미터로 필터링 가능, page/limit으로 페이지네이션)
 app.get('/api/logs', async (req, res) => {
+	const { mac, ip, serial } = req.query;
+	const page = Math.max(parseInt(req.query.page) || 1, 1);
+	const limit = Math.min(Math.max(parseInt(req.query.limit) || 100, 1), 500);
+	const skip = (page - 1) * limit;
+
+	const query = {};
+
+	if (mac) {
+		query.mac_address = new RegExp(mac, 'i');
+	}
+
+	if (ip) {
+		query.ip_address = ip;
+	}
+
+	if (serial) {
+		query.serial = new RegExp(serial, 'i');
+	}
+
 	try {
-		const logs = await AlarmLog.find()
-			.sort({ timestamp: -1 })
-			.select('mac_address ip_address timestamp status active serial -_id'); // 5가지 필드 조회
+		if (Object.keys(query).length > 0) {
+			console.log(`[GET /api/logs] Query: ${JSON.stringify(query)}, page: ${page}, limit: ${limit}`);
+		}
+
+		const [logs, total] = await Promise.all([
+			AlarmLog.find(query)
+				.sort({ timestamp: -1 })
+				.skip(skip)
+				.limit(limit)
+				.select('mac_address ip_address timestamp stop_timestamp status active serial -_id'),
+			AlarmLog.countDocuments(query)
+		]);
 
 		res.json({
-			data: logs
+			data: logs,
+			pagination: {
+				page,
+				limit,
+				total,
+				totalPages: Math.ceil(total / limit)
+			}
 		});
 	} catch (error) {
 		console.error('조회 에러:', error);
@@ -212,46 +246,18 @@ app.get('/api/logs', async (req, res) => {
 	}
 });
 
-
-// [GET] /api/logs/filter: 특정 MAC 주소 및 IP 주소로 데이터 조회 
-app.get('/api/logs/filter', async (req, res) => {
-	const { mac, ip, active } = req.query; 
-	let query = {};
-
-	if (mac) {
-		query.mac_address = new RegExp(mac, 'i'); 
-	}
-	
-	if (ip) {
-		query.ip_address = ip; 
-	}
-	
-	if (active !== undefined) {
-		// 쿼리 파라미터는 문자열이므로 boolean으로 변환
-		query.active = active.toLowerCase() === 'true'; 
-	}
-
-	if (Object.keys(query).length === 0) {
-		return res.status(400).json({ 
-			success: false, 
-			message: "MAC, IP, 또는 Active 상태를 쿼리 파라미터로 제공해야 합니다." 
-		});
-	}
-
+// [GET] /api/devices: 등록된 디바이스 전체 조회 (mac/serial 필터링은 프론트에서)
+app.get('/api/devices', async (req, res) => {
 	try {
-		console.log(`[GET FILTER] Query: ${JSON.stringify(query)}`);
+		const devices = await Device.find()
+			.sort({ mac_address: 1 })
+			.select('mac_address serial -_id');
 
-		const logs = await AlarmLog.find(query)
-			.sort({ timestamp: -1 })
-			.select('mac_address ip_address timestamp stop_timestamp status active serial -_id');
-		
 		res.json({
-			data: logs
+			data: devices
 		});
-
-	} 
-	catch (error) {
-		console.error('필터 조회 에러:', error);
+	} catch (error) {
+		console.error('디바이스 조회 에러:', error);
 		res.status(500).json({ success: false, message: error.message });
 	}
 });
