@@ -78,7 +78,7 @@ async function handleAlarmClear({ mac, ip, stopTime }) {
 
 function setupMqttClient() {
 	// 3.1. 브로커 정보 설정
-	const BROKER_URL = 'mqtt://localhost:1883'; 
+	const BROKER_URL = 'mqtt://broker.emqx.io:1883'; 
 	const TOPIC = 'alarm';
 
 	const client = mqtt.connect(BROKER_URL);
