@@ -4,6 +4,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const mqtt = require('mqtt');
+const { startDailyBackupCron } = require('./backup');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -36,8 +37,43 @@ mongoose.connect(process.env.MONGO_URI)
 		console.log('✅ MongoDB Connected');
 		createTTLIndex();
 		setupMqttClient();
+		startLogIntervalTask();
+		startDailyBackupCron(Log);
 	})
 	.catch(err => console.error('❌ MongoDB Connection Error:', err));
+
+
+// 10분마다 캐시된 최신 레지스터 값을 logs 컬렉션에 저장
+const LOG_INTERVAL_MS = 10 * 60 * 1000;
+function startLogIntervalTask() {
+	setInterval(async () => {
+		if (latestRegisterCache.size === 0) return;
+		const now = new Date();
+		try {
+			const macs = Array.from(latestRegisterCache.keys());
+			const devices = await Device.find({ mac_address: { $in: macs } })
+				.select('mac_address serial -_id')
+				.lean();
+			const serialMap = new Map(devices.map(d => [d.mac_address, d.serial]));
+
+			const docs = [];
+			for (const [mac, val] of latestRegisterCache.entries()) {
+				docs.push({
+					timestamp: now,
+					metadata: { mac, serial: serialMap.get(mac) || null },
+					pressure: val.pressure,
+					current1: val.current1,
+					current2: val.current2
+				});
+			}
+			const result = await Log.insertMany(docs);
+			console.log(`💾 Logs saved: ${result.length} devices @ ${now.toISOString()}`);
+		} catch (err) {
+			console.error('❌ Log interval insert error:', err.message);
+		}
+	}, LOG_INTERVAL_MS);
+	console.log(`⏱️ Log interval task scheduled (every ${LOG_INTERVAL_MS / 60000} minutes)`);
+}
 
 
 // 2. 스키마 정의 및 모델: mac, ip, time, status, active
@@ -62,6 +98,47 @@ const DeviceSchema = new mongoose.Schema({
     serial: { type: String, required: true }
 });
 const Device = mongoose.model('Device', DeviceSchema, 'devices');
+
+// logs 시계열 컬렉션 (10분 주기 차압/전류 기록, 30일 후 자동 만료)
+const LogSchema = new mongoose.Schema({
+	timestamp: { type: Date, required: true },
+	metadata: {
+		mac: { type: String, required: true },
+		serial: { type: String, default: null }
+	},
+	pressure: { type: Number },   // mmAq
+	current1: { type: Number },   // A
+	current2: { type: Number }    // A
+}, {
+	collection: 'logs',
+	timeseries: {
+		timeField: 'timestamp',
+		metaField: 'metadata',
+		granularity: 'minutes'
+	},
+	expireAfterSeconds: 2592000
+});
+const Log = mongoose.model('Log', LogSchema);
+
+
+// MAC -> 가장 최근 수신한 레지스터 값 캐시 (10분 주기 logs 저장용)
+const latestRegisterCache = new Map();
+
+// MQTT payload의 hex 레지스터 덩어리를 Int16 배열 44개로 파싱
+function parseRegisterHex(hexBlob) {
+	if (typeof hexBlob !== 'string') return null;
+	let hex = hexBlob.startsWith('0x') || hexBlob.startsWith('0X') ? hexBlob.slice(2) : hexBlob;
+	if (hex.length < 176) return null;
+	hex = hex.slice(0, 176);
+	const registers = new Array(44);
+	for (let i = 0; i < 44; i++) {
+		const raw = parseInt(hex.slice(i * 4, i * 4 + 4), 16);
+		if (Number.isNaN(raw)) return null;
+		// Int16 signed 변환
+		registers[i] = raw >= 0x8000 ? raw - 0x10000 : raw;
+	}
+	return registers;
+}
 
 
 // 3. MQTT 클라이언트 설정 및 구독
@@ -103,6 +180,7 @@ function setupMqttClient() {
 		const rawPayload = message.toString();
 		console.log(`[MQTT 수신] 토픽: ${topic}`);
 		console.log(`[MQTT 수신] 내용: ${rawPayload}`);
+		console.log(`[MQTT 수신] hex(${message.length}B): ${message.toString('hex')}`);
 		
 		// 2. 공백 기준으로 문자열을 분리 [0:날짜, 1:시간, 2:MAC, 3:IP, 4:Flag, 5:Code, 6:Count]
 		const parts = payload.split(' '); 
@@ -113,17 +191,38 @@ function setupMqttClient() {
 		}
 
 		// 4. 데이터 추출
-		const date_part = parts[0]; 
-		const time_part = parts[1]; 
-		const mac_address = parts[2]; 
+		const date_part = parts[0];
+		const time_part = parts[1];
+		const mac_address = parts[2];
 		const ip_address = parts[3];
 		const flag = parseInt(parts[4]);  // 1:발생, 0:해제
 		const code = parseInt(parts[5]);	// 알람 코드 (0~7)
+		const register_blob = parts[6];   // 0x{176 hex chars} = 레지스터 0~43
 
 		// 5. 시각 생성 및 변환 (KST)
 		const real_timestamp_string = `${date_part}T${time_part}+09:00`;
 		const real_timestamp = new Date(real_timestamp_string);
-		
+
+		// 5.1. 레지스터 hex 파싱 → 차압/CT1/CT2 캐시 갱신
+		// (register hex 덩어리가 들어왔을 때만; 옛날 포맷의 짧은 숫자 payload는 조용히 무시)
+		const looksLikeRegisterHex = typeof register_blob === 'string'
+			&& (register_blob.startsWith('0x') || register_blob.startsWith('0X'))
+			&& register_blob.length >= 178;
+		if (looksLikeRegisterHex) {
+			const registers = parseRegisterHex(register_blob);
+			if (registers) {
+				latestRegisterCache.set(mac_address, {
+					pressure: registers[0],          // mmAq, scale 1
+					current1: registers[1] / 10,     // A, scale 0.1
+					current2: registers[2] / 10,     // A, scale 0.1
+					ip_address,
+					receivedAt: real_timestamp,
+				});
+			} else {
+				console.warn(`⚠️ Register hex parse failed for MAC=${mac_address}: ${register_blob}`);
+			}
+		}
+
 		try {
 			// DB에서 해당 MAC 주소에 매핑된 시리얼 넘버가 있는지 확인
 			const deviceMatch = await Device.findOne({ mac_address: mac_address });
