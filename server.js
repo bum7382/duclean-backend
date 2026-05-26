@@ -124,6 +124,9 @@ const Log = mongoose.model('Log', LogSchema);
 // MAC -> 가장 최근 수신한 레지스터 값 캐시 (10분 주기 logs 저장용)
 const latestRegisterCache = new Map();
 
+// MAC -> 마지막으로 본 (flag, code) — 알람 상태 변경 시에만 로그 찍기 위함
+const lastAlarmState = new Map();
+
 // MQTT payload 파싱:
 //   "YYYY-MM-DD HH:MM:SS MAC IP [reg0, reg1, ..., reg68]"
 // → { date, time, mac, ip, registers: number[] }
@@ -184,8 +187,6 @@ function setupMqttClient() {
 		// 3.4. 메시지 수신 이벤트 처리 
 	client.on('message', async (topic, message) => {
 		const payload = message.toString().trim();
-		console.log(`[MQTT 수신] 토픽: ${topic}`);
-		console.log(`[MQTT 수신] 내용: ${payload}`);
 
 		const parsed = parseMqttPayload(payload);
 		if (!parsed) {
@@ -217,11 +218,17 @@ function setupMqttClient() {
 			receivedAt: real_timestamp,
 		});
 
+		// 알람 상태 변경 시에만 로그 출력
+		const prev = lastAlarmState.get(mac_address);
+		if (!prev || prev.flag !== flag || prev.code !== code) {
+			console.log(`[MQTT] Alarm state changed: MAC=${mac_address}, Flag=${flag}, Code=${code}`);
+			lastAlarmState.set(mac_address, { flag, code });
+		}
+
 		try {
 			// DB에서 해당 MAC 주소에 매핑된 시리얼 넘버가 있는지 확인
 			const deviceMatch = await Device.findOne({ mac_address: mac_address });
 			const currentSerial = deviceMatch ? deviceMatch.serial : null;
-			console.log(`[MQTT] Received: MAC=${mac_address}, Flag=${flag}, Code=${code}`);
 
 			if (flag === 0) {
 				// 7-1. Flag=0: 알람 해제 요청 -> 기존 활성 로그 해제
@@ -234,7 +241,6 @@ function setupMqttClient() {
 				// 7-2. 해제 이벤트 로그 생성
 				// 알람 코드가 0(알람없음)인 해제 이벤트는 저장하지 않음.
 				if (code === 0) {
-					console.log('ℹ️ Ignoring save: Flag=0 received with Code=0 (Redundant clear event).');
 					return;
 				}
 
@@ -277,10 +283,8 @@ function setupMqttClient() {
 					await newLog.save();
 					console.log('💾 New Alarm log saved to MongoDB (Active: true).');
 
-			} else if (flag === 1 && code === 0) {
-				// Flag=1이고 code=0: 알람 없음 -> 저장하지 않고 무시
-				console.log('ℹ️ Received Flag=1, Code=0 (Normal status check). Ignoring log save.');
 			}
+			// flag=1 && code=0 (정상 상태 체크)는 로그 없이 무시
 
 		} catch (error) {
 			console.error('❌ Error saving/clearing MQTT message:', error.message);
@@ -345,6 +349,36 @@ app.get('/api/logs', async (req, res) => {
 		});
 	} catch (error) {
 		console.error('조회 에러:', error);
+		res.status(500).json({ success: false, message: error.message });
+	}
+});
+
+// [GET] /api/metrics: 시계열 센서 로그 조회 (mac 필수, 기간 필터 가능)
+app.get('/api/metrics', async (req, res) => {
+	const { mac, from, to } = req.query;
+	const limit = Math.min(Math.max(parseInt(req.query.limit) || 1000, 1), 10000);
+
+	if (!mac) {
+		return res.status(400).json({ success: false, message: "mac 쿼리 파라미터가 필요합니다." });
+	}
+
+	const query = { 'metadata.mac': mac };
+	if (from || to) {
+		query.timestamp = {};
+		if (from) query.timestamp.$gte = new Date(from);
+		if (to) query.timestamp.$lte = new Date(to);
+	}
+
+	try {
+		const logs = await Log.find(query)
+			.sort({ timestamp: 1 })
+			.limit(limit)
+			.select('timestamp pressure current1 current2 -_id')
+			.lean();
+
+		res.json({ data: logs });
+	} catch (error) {
+		console.error('메트릭 조회 에러:', error);
 		res.status(500).json({ success: false, message: error.message });
 	}
 });
