@@ -4,7 +4,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const mqtt = require('mqtt');
-const { startDailyBackupCron } = require('./backup');
+const { startDailyBackupCron, logsToCsv, getDriveClient } = require('./backup');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -379,6 +379,82 @@ app.get('/api/metrics', async (req, res) => {
 		res.json({ data: logs });
 	} catch (error) {
 		console.error('메트릭 조회 에러:', error);
+		res.status(500).json({ success: false, message: error.message });
+	}
+});
+
+// [GET] /api/metrics/export: 시계열 센서 로그 CSV 다운로드
+app.get('/api/metrics/export', async (req, res) => {
+	const { mac, from, to } = req.query;
+
+	if (!mac) {
+		return res.status(400).json({ success: false, message: "mac 쿼리 파라미터가 필요합니다." });
+	}
+
+	const query = { 'metadata.mac': mac };
+	if (from || to) {
+		query.timestamp = {};
+		if (from) query.timestamp.$gte = new Date(from);
+		if (to) query.timestamp.$lte = new Date(to);
+	}
+
+	try {
+		const logs = await Log.find(query)
+			.sort({ timestamp: 1 })
+			.lean();
+
+		const csv = logsToCsv(logs);
+		const fromLabel = from ? new Date(from).toISOString().slice(0, 10) : 'all';
+		const toLabel = to ? new Date(to).toISOString().slice(0, 10) : 'all';
+		const fileName = `duclean_${mac.replace(/:/g, '')}_${fromLabel}_${toLabel}.csv`;
+
+		res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+		res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+		// UTF-8 BOM (Excel 호환)
+		res.write('﻿');
+		res.end(csv);
+	} catch (error) {
+		console.error('메트릭 export 에러:', error);
+		res.status(500).json({ success: false, message: error.message });
+	}
+});
+
+// [GET] /api/backups: Google Drive 백업 CSV 목록
+app.get('/api/backups', async (req, res) => {
+	try {
+		const drive = getDriveClient();
+		const result = await drive.files.list({
+			q: "name contains 'duclean_logs_' and mimeType='text/csv' and trashed=false",
+			fields: 'files(id, name, size, createdTime)',
+			orderBy: 'name desc',
+			pageSize: 200,
+		});
+		res.json({ data: result.data.files || [] });
+	} catch (error) {
+		console.error('백업 목록 조회 에러:', error.message);
+		res.status(500).json({ success: false, message: error.message });
+	}
+});
+
+// [GET] /api/backups/:id/download: Drive 파일 프록시 다운로드
+app.get('/api/backups/:id/download', async (req, res) => {
+	const { id } = req.params;
+	try {
+		const drive = getDriveClient();
+		const meta = await drive.files.get({ fileId: id, fields: 'name' });
+		const stream = await drive.files.get(
+			{ fileId: id, alt: 'media' },
+			{ responseType: 'stream' }
+		);
+
+		res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+		res.setHeader('Content-Disposition', `attachment; filename="${meta.data.name}"`);
+		stream.data.on('error', (err) => {
+			console.error('Drive stream error:', err.message);
+			if (!res.headersSent) res.status(500).end();
+		}).pipe(res);
+	} catch (error) {
+		console.error('백업 다운로드 에러:', error.message);
 		res.status(500).json({ success: false, message: error.message });
 	}
 });

@@ -85,4 +85,4 @@ function startDailyBackupCron(Log) {
 	console.log('🗓️  Daily Drive backup cron scheduled (KST 00:30)');
 }
 
-module.exports = { startDailyBackupCron, backupYesterday };
+module.exports = { startDailyBackupCron, backupYesterday, logsToCsv, getDriveClient };
