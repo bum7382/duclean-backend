@@ -124,20 +124,28 @@ const Log = mongoose.model('Log', LogSchema);
 // MAC -> 가장 최근 수신한 레지스터 값 캐시 (10분 주기 logs 저장용)
 const latestRegisterCache = new Map();
 
-// MQTT payload의 hex 레지스터 덩어리를 Int16 배열 44개로 파싱
-function parseRegisterHex(hexBlob) {
-	if (typeof hexBlob !== 'string') return null;
-	let hex = hexBlob.startsWith('0x') || hexBlob.startsWith('0X') ? hexBlob.slice(2) : hexBlob;
-	if (hex.length < 176) return null;
-	hex = hex.slice(0, 176);
-	const registers = new Array(44);
-	for (let i = 0; i < 44; i++) {
-		const raw = parseInt(hex.slice(i * 4, i * 4 + 4), 16);
-		if (Number.isNaN(raw)) return null;
-		// Int16 signed 변환
-		registers[i] = raw >= 0x8000 ? raw - 0x10000 : raw;
+// MQTT payload 파싱:
+//   "YYYY-MM-DD HH:MM:SS MAC IP [reg0, reg1, ..., reg68]"
+// → { date, time, mac, ip, registers: number[] }
+function parseMqttPayload(payload) {
+	const arrayStart = payload.indexOf('[');
+	if (arrayStart === -1) return null;
+	const header = payload.slice(0, arrayStart).trim().split(/\s+/);
+	if (header.length < 4) return null;
+	let registers;
+	try {
+		registers = JSON.parse(payload.slice(arrayStart));
+	} catch (_) {
+		return null;
 	}
-	return registers;
+	if (!Array.isArray(registers)) return null;
+	return {
+		date: header[0],
+		time: header[1],
+		mac: header[2],
+		ip: header[3],
+		registers,
+	};
 }
 
 
@@ -175,53 +183,39 @@ function setupMqttClient() {
 
 		// 3.4. 메시지 수신 이벤트 처리 
 	client.on('message', async (topic, message) => {
-		const payload = message.toString().trim(); 
-
-		const rawPayload = message.toString();
+		const payload = message.toString().trim();
 		console.log(`[MQTT 수신] 토픽: ${topic}`);
-		console.log(`[MQTT 수신] 내용: ${rawPayload}`);
-		console.log(`[MQTT 수신] hex(${message.length}B): ${message.toString('hex')}`);
-		
-		// 2. 공백 기준으로 문자열을 분리 [0:날짜, 1:시간, 2:MAC, 3:IP, 4:Flag, 5:Code, 6:Count]
-		const parts = payload.split(' '); 
+		console.log(`[MQTT 수신] 내용: ${payload}`);
 
-		if (parts.length < 7) {
-			console.error(`❌ MQTT Message Error: Invalid message format (parts < 7). Received: [${payload}]`);
-			return; 
+		const parsed = parseMqttPayload(payload);
+		if (!parsed) {
+			console.error(`❌ MQTT Message Error: parse failed. Received: [${payload}]`);
+			return;
 		}
 
-		// 4. 데이터 추출
-		const date_part = parts[0];
-		const time_part = parts[1];
-		const mac_address = parts[2];
-		const ip_address = parts[3];
-		const flag = parseInt(parts[4]);  // 1:발생, 0:해제
-		const code = parseInt(parts[5]);	// 알람 코드 (0~7)
-		const register_blob = parts[6];   // 0x{176 hex chars} = 레지스터 0~43
+		const { date: date_part, time: time_part, mac: mac_address, ip: ip_address, registers } = parsed;
 
-		// 5. 시각 생성 및 변환 (KST)
+		// 새 포맷은 reg 0~68(69개). 짧은 배열은 옛날/미업데이트 펌웨어 → 스킵
+		if (registers.length < 26) {
+			console.warn(`⚠️ Skipping legacy/short payload from MAC=${mac_address} (registers.length=${registers.length})`);
+			return;
+		}
+
+		const flag = registers[24];  // 알람부저 플래그 (1:발생, 0:해제)
+		const code = registers[25];  // 알람발생코드 (0~7)
+
+		// 시각 생성 및 변환 (KST)
 		const real_timestamp_string = `${date_part}T${time_part}+09:00`;
 		const real_timestamp = new Date(real_timestamp_string);
 
-		// 5.1. 레지스터 hex 파싱 → 차압/CT1/CT2 캐시 갱신
-		// (register hex 덩어리가 들어왔을 때만; 옛날 포맷의 짧은 숫자 payload는 조용히 무시)
-		const looksLikeRegisterHex = typeof register_blob === 'string'
-			&& (register_blob.startsWith('0x') || register_blob.startsWith('0X'))
-			&& register_blob.length >= 178;
-		if (looksLikeRegisterHex) {
-			const registers = parseRegisterHex(register_blob);
-			if (registers) {
-				latestRegisterCache.set(mac_address, {
-					pressure: registers[0],          // mmAq, scale 1
-					current1: registers[1] / 10,     // A, scale 0.1
-					current2: registers[2] / 10,     // A, scale 0.1
-					ip_address,
-					receivedAt: real_timestamp,
-				});
-			} else {
-				console.warn(`⚠️ Register hex parse failed for MAC=${mac_address}: ${register_blob}`);
-			}
-		}
+		// 차압/CT1/CT2 캐시 갱신
+		latestRegisterCache.set(mac_address, {
+			pressure: registers[0],          // mmAq, scale 1
+			current1: registers[1] / 10,     // A, scale 0.1
+			current2: registers[2] / 10,     // A, scale 0.1
+			ip_address,
+			receivedAt: real_timestamp,
+		});
 
 		try {
 			// DB에서 해당 MAC 주소에 매핑된 시리얼 넘버가 있는지 확인
