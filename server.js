@@ -218,12 +218,15 @@ function setupMqttClient() {
 			receivedAt: real_timestamp,
 		});
 
-		// 알람 상태 변경 시에만 로그 출력
+		// 알람 상태 변경 시에만 로그 + DB 작업 수행
+		// (디바이스가 같은 상태를 매초 반복 전송하므로 변화 없으면 무시)
 		const prev = lastAlarmState.get(mac_address);
-		if (!prev || prev.flag !== flag || prev.code !== code) {
-			console.log(`[MQTT] Alarm state changed: MAC=${mac_address}, Flag=${flag}, Code=${code}`);
-			lastAlarmState.set(mac_address, { flag, code });
+		const isStateChange = !prev || prev.flag !== flag || prev.code !== code;
+		if (!isStateChange) {
+			return;
 		}
+		console.log(`[MQTT] Alarm state changed: MAC=${mac_address}, Flag=${flag}, Code=${code}`);
+		lastAlarmState.set(mac_address, { flag, code });
 
 		try {
 			// DB에서 해당 MAC 주소에 매핑된 시리얼 넘버가 있는지 확인
