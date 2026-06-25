@@ -261,28 +261,26 @@ function setupMqttClient() {
 
 				// 8. Flag=1: 알람 발생 요청 (code > 0일 때만 발생으로 기록)
 			if (flag === 1 && code > 0) {
-					// 같은 MAC+code의 활성 알람이 이미 있으면 중복 저장 skip
-					// (디바이스가 매초 같은 상태를 반복 전송하므로 dedup 필요)
-					const existing = await AlarmLog.findOne({
-						mac_address: mac_address,
-						status: code,
-						active: true,
-					}).lean();
-					if (existing) {
-						return;
+					// 원자적 upsert: 같은 (MAC, status, active=true) 있으면 no-op, 없으면 INSERT
+					// (findOne + save 분리 시 race condition으로 중복 INSERT 발생 가능)
+					const result = await AlarmLog.findOneAndUpdate(
+						{ mac_address: mac_address, status: code, active: true },
+						{
+							$setOnInsert: {
+								timestamp: real_timestamp,
+								mac_address: mac_address,
+								ip_address: ip_address,
+								status: code,
+								active: true,
+								serial: currentSerial,
+							},
+						},
+						{ upsert: true, new: false, setDefaultsOnInsert: true }
+					);
+					if (!result) {
+						// new: false + upsert → 새로 INSERT된 경우 null 반환
+						console.log('💾 New Alarm log saved to MongoDB (Active: true).');
 					}
-
-					const newLog = new AlarmLog({
-							timestamp: real_timestamp,
-							mac_address: mac_address,
-							ip_address: ip_address,
-							status: code,
-							active: true, // 알람 발생 시 active: true
-							serial: currentSerial
-					});
-					await newLog.save();
-					console.log('💾 New Alarm log saved to MongoDB (Active: true).');
-
 			}
 			// flag=1 && code=0 (정상 상태 체크)는 로그 없이 무시
 
